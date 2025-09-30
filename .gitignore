@@ -1,0 +1,32 @@
+# Virtual Environment
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Environment Variables
+.env
+*.env
+
+# Firebase Credentials - NEVER COMMIT THIS
+serviceAccountKey.json
+firebase-key.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+app.log
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
