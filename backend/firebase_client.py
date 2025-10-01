@@ -41,12 +41,30 @@ class FirebaseClient:
             # Try to get credentials from environment variable (for deployment)
             if 'FIREBASE_SERVICE_ACCOUNT' in os.environ:
                 logger.info("Loading Firebase credentials from environment variable")
-                sa_info = json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT'])
-                cred = credentials.Certificate(sa_info)
+                try:
+                    sa_info = json.loads(os.environ.get('FIREBASE_SERVICE_ACCOUNT', '{}'))
+                    
+                    # Validate that we have essential fields
+                    required_fields = ['type', 'project_id', 'private_key', 'client_email']
+                    missing_fields = [field for field in required_fields if field not in sa_info]
+                    
+                    if missing_fields:
+                        logger.error(f"Missing required fields in credentials: {missing_fields}")
+                        return
+                    
+                    cred = credentials.Certificate(sa_info)
+                    logger.info("Successfully parsed credentials from environment")
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid JSON in FIREBASE_SERVICE_ACCOUNT: {e}")
+                    return
+                except Exception as e:
+                    logger.error(f"Error parsing credentials: {e}")
+                    return
             
             # Try to load from local file (for development)
             elif os.path.exists("serviceAccountKey.json"):
-                logger.info("Loading Firebase credentials from local file")
+                logger.info("Loading Firebase credentials from local file: serviceAccountKey.json")
                 cred = credentials.Certificate("serviceAccountKey.json")
             
             # Try alternative file name
@@ -55,31 +73,36 @@ class FirebaseClient:
                 cred = credentials.Certificate("firebase-key.json")
             
             else:
-                logger.error("No Firebase credentials found. Please set FIREBASE_SERVICE_ACCOUNT environment variable or place serviceAccountKey.json file")
+                logger.error("="*60)
+                logger.error("No Firebase credentials found!")
+                logger.error("Please set FIREBASE_SERVICE_ACCOUNT environment variable")
+                logger.error("OR place serviceAccountKey.json file in project directory")
+                logger.error("="*60)
                 return
             
             # Initialize Firebase
             self.app = firebase_admin.initialize_app(cred)
             self.db = firestore.client()
             
-            logger.info("Firebase initialized successfully")
+            logger.info("✅ Firebase initialized successfully")
             
             # Test connection
             self._test_connection()
             
         except Exception as e:
-            logger.error(f"Failed to initialize Firebase: {e}")
+            logger.error(f"❌ Failed to initialize Firebase: {e}")
+            logger.error("Please check your credentials and try again")
             self.db = None
     
     def _test_connection(self):
         """Test Firebase connection"""
         try:
-            # Try to read from a collection (this will create it if it doesn't exist)
+            # Try to read from a collection
             test_ref = self.db.collection('_test').limit(1)
-            list(test_ref.stream())  # Execute the query
-            logger.info("Firebase connection test successful")
+            list(test_ref.stream())
+            logger.info("✅ Firebase connection test successful")
         except Exception as e:
-            logger.error(f"Firebase connection test failed: {e}")
+            logger.error(f"❌ Firebase connection test failed: {e}")
     
     def is_connected(self) -> bool:
         """Check if Firebase is connected"""

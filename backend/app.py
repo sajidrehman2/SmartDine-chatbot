@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
+# Validate Firebase connection at startup
+if db is None:
+    logger.error("="*60)
+    logger.error("CRITICAL: Firebase database not initialized!")
+    logger.error("Set FIREBASE_SERVICE_ACCOUNT environment variable")
+    logger.error("="*60)
+
 @app.route('/')
 def index():
     """Health check endpoint"""
@@ -29,6 +36,14 @@ def health():
     """Detailed health check"""
     try:
         # Test database connection
+        if db is None:
+            return jsonify({
+                "status": "unhealthy",
+                "database": "not initialized",
+                "error": "Firebase not connected",
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }), 503
+            
         db.collection('menus').limit(1).get()
         db_status = "connected"
     except Exception as e:
@@ -37,6 +52,8 @@ def health():
     
     return jsonify({
         "status": "healthy",
+        "service": "Smart Restaurant Ordering Assistant",
+        "version": "1.0.0",
         "database": db_status,
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
@@ -44,6 +61,12 @@ def health():
 @app.route('/menu', methods=['GET'])
 def get_menu():
     """Get all menu items"""
+    if db is None:
+        return jsonify({
+            "success": False,
+            "error": "Database not available"
+        }), 503
+    
     try:
         docs = db.collection('menus').where('available', '==', True).stream()
         menu = []
@@ -70,6 +93,12 @@ def get_menu():
 @app.route('/menu/<category>', methods=['GET'])
 def get_menu_by_category(category):
     """Get menu items by category"""
+    if db is None:
+        return jsonify({
+            "success": False,
+            "error": "Database not available"
+        }), 503
+    
     try:
         docs = db.collection('menus').where('category', '==', category).where('available', '==', True).stream()
         menu = []
@@ -95,6 +124,16 @@ def get_menu_by_category(category):
 @app.route('/order', methods=['POST'])
 def place_order():
     """Process and place an order from natural language input"""
+    
+    # Check database connection first
+    if db is None:
+        logger.error("Order attempt failed - database not connected")
+        return jsonify({
+            "success": False,
+            "error": "Database service unavailable",
+            "details": "Please contact administrator"
+        }), 503
+    
     try:
         data = request.json
         user_text = data.get('message', '').strip()
@@ -108,12 +147,29 @@ def place_order():
         
         logger.info(f"Processing order: {user_text}")
         
-        # Get menu items
-        menu_docs = []
-        for doc in db.collection('menus').where('available', '==', True).stream():
-            menu_item = doc.to_dict()
-            menu_item['doc_id'] = doc.id
-            menu_docs.append(menu_item)
+        # Get menu items with error handling
+        try:
+            menu_docs = []
+            for doc in db.collection('menus').where('available', '==', True).stream():
+                menu_item = doc.to_dict()
+                menu_item['doc_id'] = doc.id
+                menu_docs.append(menu_item)
+            
+            if not menu_docs:
+                logger.warning("No menu items in database")
+                return jsonify({
+                    "success": False,
+                    "error": "Menu not available",
+                    "details": "No menu items configured"
+                }), 503
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch menu: {e}")
+            return jsonify({
+                "success": False,
+                "error": "Could not load menu",
+                "details": str(e)
+            }), 500
         
         menu_names = [item['name'] for item in menu_docs]
         
@@ -200,31 +256,40 @@ def place_order():
                 "updated_at": datetime.datetime.utcnow()
             }
             
-            # Save to database
-            db.collection('orders').document(order_id).set(order_doc)
-            
-            # Log the conversation
-            chat_log = {
-                "order_id": order_id,
-                "sender": "user",
-                "message": user_text,
-                "timestamp": datetime.datetime.utcnow(),
-                "parsed_intent": parsed['intent'],
-                "extracted_items": parsed['items']
-            }
-            db.collection('chat_logs').add(chat_log)
-            
-            # Add system response to chat log
-            response_message = f"Order confirmed! Your order ID is {order_id}. Total: ${total_price}. Items: {', '.join([f'{item['quantity']}x {item['name']}' for item in order_items])}"
-            system_log = {
-                "order_id": order_id,
-                "sender": "system",
-                "message": response_message,
-                "timestamp": datetime.datetime.utcnow()
-            }
-            db.collection('chat_logs').add(system_log)
-            
-            logger.info(f"Order placed successfully: {order_id}")
+            # Save to database with error handling
+            try:
+                db.collection('orders').document(order_id).set(order_doc)
+                
+                # Log the conversation
+                chat_log = {
+                    "order_id": order_id,
+                    "sender": "user",
+                    "message": user_text,
+                    "timestamp": datetime.datetime.utcnow(),
+                    "parsed_intent": parsed['intent'],
+                    "extracted_items": parsed['items']
+                }
+                db.collection('chat_logs').add(chat_log)
+                
+                # Add system response to chat log
+                response_message = f"Order confirmed! Your order ID is {order_id}. Total: ${total_price}. Items: {', '.join([f'{item['quantity']}x {item['name']}' for item in order_items])}"
+                system_log = {
+                    "order_id": order_id,
+                    "sender": "system",
+                    "message": response_message,
+                    "timestamp": datetime.datetime.utcnow()
+                }
+                db.collection('chat_logs').add(system_log)
+                
+                logger.info(f"Order placed successfully: {order_id}")
+                
+            except Exception as e:
+                logger.error(f"Failed to save order: {e}")
+                return jsonify({
+                    "success": False,
+                    "error": "Failed to save order",
+                    "details": str(e)
+                }), 500
             
             return jsonify({
                 "success": True,
@@ -251,6 +316,12 @@ def place_order():
 @app.route('/orders', methods=['GET'])
 def list_orders():
     """Get list of orders with optional filtering"""
+    if db is None:
+        return jsonify({
+            "success": False,
+            "error": "Database not available"
+        }), 503
+    
     try:
         limit = request.args.get('limit', 50, type=int)
         status_filter = request.args.get('status', None)
@@ -288,6 +359,12 @@ def list_orders():
 @app.route('/orders/<order_id>', methods=['GET'])
 def get_order(order_id):
     """Get specific order by ID"""
+    if db is None:
+        return jsonify({
+            "success": False,
+            "error": "Database not available"
+        }), 503
+    
     try:
         doc = db.collection('orders').document(order_id).get()
         
@@ -321,6 +398,12 @@ def get_order(order_id):
 @app.route('/orders/<order_id>/status', methods=['PUT'])
 def update_order_status(order_id):
     """Update order status"""
+    if db is None:
+        return jsonify({
+            "success": False,
+            "error": "Database not available"
+        }), 503
+    
     try:
         data = request.json
         new_status = data.get('status')
@@ -359,6 +442,12 @@ def update_order_status(order_id):
 @app.route('/chat/<order_id>', methods=['GET'])
 def get_chat_history(order_id):
     """Get chat history for an order"""
+    if db is None:
+        return jsonify({
+            "success": False,
+            "error": "Database not available"
+        }), 503
+    
     try:
         docs = db.collection('chat_logs').where('order_id', '==', order_id).order_by('timestamp').stream()
         chat_history = []
@@ -406,5 +495,6 @@ if __name__ == '__main__':
     
     logger.info(f"Starting Smart Restaurant Ordering Assistant on port {port}")
     logger.info(f"Debug mode: {debug}")
+    logger.info(f"Database status: {'Connected' if db else 'NOT CONNECTED'}")
     
     app.run(host='0.0.0.0', port=port, debug=debug)
